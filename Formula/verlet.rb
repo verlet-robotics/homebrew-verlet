@@ -11,6 +11,12 @@ class Verlet < Formula
   sha256 "e855a1f56a2a45a677b4dee6eb1faaa51572fe85c01a429ab288a2bac84b1c3a"
   license "Apache-2.0"
 
+  # Build dep for hf_xet — Hugging Face Xet client is a Rust extension
+  # built via maturin. huggingface_hub 1.x makes hf_xet a hard runtime
+  # requirement on x86_64/arm64/aarch64, so the formula must be able to
+  # compile it from source under brew's --no-binary :all: install path.
+  depends_on "rust" => :build
+
   depends_on "libyaml"
   depends_on "python@3.12"
 
@@ -77,6 +83,15 @@ class Verlet < Formula
   resource "markdown-it-py" do
     url "https://files.pythonhosted.org/packages/06/ff/7841249c247aa650a76b9ee4bbaeae59370dc8bfd2f6c01f3630c35eb134/markdown_it_py-4.2.0.tar.gz"
     sha256 "04a21681d6fbb623de53f6f364d352309d4094dd4194040a10fd51833e418d49"
+  end
+
+  # maturin is hf_xet's PEP 517 build backend. Pinned in range to satisfy
+  # hf_xet 1.5.0's `requires = ["maturin>=1.7,<2.0"]`. Without an explicit
+  # resource block, brew's pip --no-binary :all: --uploaded-prior-to=<TS>
+  # build-isolation install fails to materialise maturin from sdist.
+  resource "maturin" do
+    url "https://files.pythonhosted.org/packages/62/72/75624ab4af4c42e026ba938582dbad5fe570977f4e8b6ea063b9659ba3b9/maturin-1.13.2.tar.gz"
+    sha256 "17fa44f1ea0d9794b322a5cd91a3aa9a574bf55dfc15789a01e37bfce7903911"
   end
 
   resource "mdurl" do
