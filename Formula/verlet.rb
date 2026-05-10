@@ -11,14 +11,21 @@ class Verlet < Formula
   sha256 "e855a1f56a2a45a677b4dee6eb1faaa51572fe85c01a429ab288a2bac84b1c3a"
   license "Apache-2.0"
 
-  # Build dep for hf_xet — Hugging Face Xet client is a Rust extension
+  # Build deps for hf_xet — Hugging Face Xet client is a Rust extension
   # built via maturin. huggingface_hub 1.x makes hf_xet a hard runtime
   # requirement on x86_64/arm64/aarch64, so the formula must be able to
   # compile it from source under brew's --no-binary :all: install path.
+  # pkgconf is needed because the native-tls swap below resolves system
+  # OpenSSL via pkg-config. Pattern lifted from homebrew-core/Formula/h/hf.rb.
+  depends_on "pkgconf" => :build
   depends_on "rust" => :build
 
   depends_on "libyaml"
   depends_on "python@3.12"
+
+  on_linux do
+    depends_on "openssl@3"
+  end
 
   resource "annotated-doc" do
     url "https://files.pythonhosted.org/packages/57/ba/046ceea27344560984e26a590f90bc7f4a75b06701f653222458922b558c/annotated_doc-0.0.4.tar.gz"
@@ -85,15 +92,6 @@ class Verlet < Formula
     sha256 "04a21681d6fbb623de53f6f364d352309d4094dd4194040a10fd51833e418d49"
   end
 
-  # maturin is hf_xet's PEP 517 build backend. Pinned in range to satisfy
-  # hf_xet 1.5.0's `requires = ["maturin>=1.7,<2.0"]`. Without an explicit
-  # resource block, brew's pip --no-binary :all: --uploaded-prior-to=<TS>
-  # build-isolation install fails to materialise maturin from sdist.
-  resource "maturin" do
-    url "https://files.pythonhosted.org/packages/62/72/75624ab4af4c42e026ba938582dbad5fe570977f4e8b6ea063b9659ba3b9/maturin-1.13.2.tar.gz"
-    sha256 "17fa44f1ea0d9794b322a5cd91a3aa9a574bf55dfc15789a01e37bfce7903911"
-  end
-
   resource "mdurl" do
     url "https://files.pythonhosted.org/packages/d6/54/cfe61301667036ec958cb99bd3efefba235e65cdeb9c84d24a8293ba1d90/mdurl-0.1.2.tar.gz"
     sha256 "bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba"
@@ -140,7 +138,34 @@ class Verlet < Formula
   end
 
   def install
-    virtualenv_install_with_resources
+    venv = virtualenv_install_with_resources(without: "hf-xet")
+
+    # hf_xet 1.5.0 builds two Cargo workspaces (xet_client + xet_data) that
+    # don't compile cleanly under Homebrew's superenv. Two upstream-known
+    # workarounds, lifted verbatim from homebrew-core/Formula/h/hf.rb (which
+    # ships the same hf_xet 1.5.0 sdist with arm64_tahoe / arm64_sequoia /
+    # arm64_sonoma bottles, proving this is the correct shape):
+    #
+    #   1. Switch xet_client's TLS backend from rustls (which vendors and
+    #      builds aws-lc-rs from source) to native-tls (links against
+    #      system Schannel/SecureTransport on macOS, OpenSSL on Linux).
+    #      aws-lc-rs's bundled C/asm bootstrap fails inside superenv on
+    #      macOS Tahoe (26.x) — see aws/aws-lc-rs#936.
+    #   2. Drop the asm feature from sha2 on arm64. The sha2-asm crate
+    #      requires `-march=armv8-a+crypto`, which Homebrew's superenv
+    #      doesn't propagate, so the link step fails.
+    resource("hf-xet").stage do
+      inreplace "xet_client/Cargo.toml",
+                'default = ["rustls-tls"]', 'default = ["native-tls"]'
+
+      if Hardware::CPU.arm?
+        inreplace "xet_data/Cargo.toml",
+                  'sha2 = { workspace = true, features = ["asm"] }',
+                  "sha2 = { workspace = true }"
+      end
+
+      venv.pip_install Pathname.pwd
+    end
   end
 
   test do
