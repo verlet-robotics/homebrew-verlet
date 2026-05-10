@@ -11,21 +11,24 @@ class Verlet < Formula
   sha256 "e855a1f56a2a45a677b4dee6eb1faaa51572fe85c01a429ab288a2bac84b1c3a"
   license "Apache-2.0"
 
-  # Build deps for hf_xet — Hugging Face Xet client is a Rust extension
-  # built via maturin. huggingface_hub 1.x makes hf_xet a hard runtime
-  # requirement on x86_64/arm64/aarch64, so the formula must be able to
-  # compile it from source under brew's --no-binary :all: install path.
-  # pkgconf is needed because the native-tls swap below resolves system
-  # OpenSSL via pkg-config. Pattern lifted from homebrew-core/Formula/h/hf.rb.
-  depends_on "pkgconf" => :build
-  depends_on "rust" => :build
+  # hf_xet is the Hugging Face Xet client — a Rust extension that
+  # huggingface_hub 1.x marks as a hard runtime dep on supported
+  # architectures. Building it from sdist requires cargo + cc-rs to
+  # compile aws-lc-sys's bundled C, but Homebrew's superenv strips the
+  # `-I` include paths cc-rs hands clang (the registry tree under
+  # CARGO_HOME isn't on superenv's allowlist), so the compile fails
+  # silently with `pip` reporting "No available output". Earlier
+  # workarounds in this tap — adding rust+maturin (#1) and inreplacing
+  # xet_client's Cargo.toml to swap rustls-tls for native-tls (#2) —
+  # were unreliable across macOS Tahoe arm64 and added an unverified
+  # tampering step against vendored Cargo manifests that would need
+  # re-validating on every hf_xet bump. Ship the prebuilt cp37-abi3
+  # wheels instead — see the per-platform `resource "hf-xet"` block
+  # below. With wheels in play we no longer need rust, maturin, or
+  # pkgconf during `brew install`.
 
   depends_on "libyaml"
   depends_on "python@3.12"
-
-  on_linux do
-    depends_on "openssl@3"
-  end
 
   resource "annotated-doc" do
     url "https://files.pythonhosted.org/packages/57/ba/046ceea27344560984e26a590f90bc7f4a75b06701f653222458922b558c/annotated_doc-0.0.4.tar.gz"
@@ -62,9 +65,30 @@ class Verlet < Formula
     sha256 "4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1"
   end
 
+  # Platform-specific abi3 wheels for hf_xet 1.5.0. cp37-abi3 means a
+  # single wheel covers cpython 3.7 through 3.x, so this stays valid as
+  # long as we're on python@3.12 (or any future bump that's >= 3.7).
   resource "hf-xet" do
-    url "https://files.pythonhosted.org/packages/74/d8/5c06fc76461418326a7decf8367480c35be11a41fd938633929c60a9ec6b/hf_xet-1.5.0.tar.gz"
-    sha256 "e0fb0a34d9f406eed88233e829a67ec016bec5af19e480eac65a233ea289a948"
+    on_macos do
+      on_arm do
+        url "https://files.pythonhosted.org/packages/9b/ff/edcc2b40162bef3ff78e14ab637e5f3b89243d6aee72f5949d3bb6a5af83/hf_xet-1.5.0-cp37-abi3-macosx_11_0_arm64.whl"
+        sha256 "fd6e5a9b0fdac4ed03ed45ef79254a655b1aaab514a02202617fbf643f5fdf7a"
+      end
+      on_intel do
+        url "https://files.pythonhosted.org/packages/3d/fb/69ff198a82cae7eb1a69fb84d93b3a3e4816564d76817fe541ddc96874eb/hf_xet-1.5.0-cp37-abi3-macosx_10_12_x86_64.whl"
+        sha256 "dad0dc84e941b8ba3c860659fe1fdc35c049d47cce293f003287757e971a8f56"
+      end
+    end
+    on_linux do
+      on_arm do
+        url "https://files.pythonhosted.org/packages/c4/a2/546f47f464737b3edbab6f8ddb57f2599b93d2cbb66f06abb475ccb48651/hf_xet-1.5.0-cp37-abi3-manylinux_2_28_aarch64.whl"
+        sha256 "9a0ee58cd18d5ea799f7ed11290bbccbe56bdd8b1d97ca74b9cc49a3945d7a3b"
+      end
+      on_intel do
+        url "https://files.pythonhosted.org/packages/49/4d/103f76b04310e5e57656696cc184690d20c466af0bca3ca88f8c8ea5d4f3/hf_xet-1.5.0-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
+        sha256 "3531b1823a0e6d77d80f9ed15ca0e00f0d115094f8ac033d5cae88f4564cc949"
+      end
+    end
   end
 
   resource "httpcore" do
@@ -138,34 +162,33 @@ class Verlet < Formula
   end
 
   def install
-    venv = virtualenv_install_with_resources(without: "hf-xet")
+    # virtualenv_install_with_resources unconditionally passes
+    # --no-binary=:all: to pip and stages each resource into a temp
+    # directory. That works for sdists but breaks for the hf-xet wheel —
+    # pip can't reinstall an already-unpacked .whl from a source dir, so
+    # the install dies with "Neither 'setup.py' nor 'pyproject.toml'
+    # found". Build the venv ourselves, install everything except hf-xet
+    # via the normal source path, then pip-install hf-xet directly from
+    # the cached .whl that Homebrew already downloaded for us.
+    venv = virtualenv_create(libexec, "python3.12")
+    venv.pip_install resources.reject { |r| r.name == "hf-xet" }
 
-    # hf_xet 1.5.0 builds two Cargo workspaces (xet_client + xet_data) that
-    # don't compile cleanly under Homebrew's superenv. Two upstream-known
-    # workarounds, lifted verbatim from homebrew-core/Formula/h/hf.rb (which
-    # ships the same hf_xet 1.5.0 sdist with arm64_tahoe / arm64_sequoia /
-    # arm64_sonoma bottles, proving this is the correct shape):
-    #
-    #   1. Switch xet_client's TLS backend from rustls (which vendors and
-    #      builds aws-lc-rs from source) to native-tls (links against
-    #      system Schannel/SecureTransport on macOS, OpenSSL on Linux).
-    #      aws-lc-rs's bundled C/asm bootstrap fails inside superenv on
-    #      macOS Tahoe (26.x) — see aws/aws-lc-rs#936.
-    #   2. Drop the asm feature from sha2 on arm64. The sha2-asm crate
-    #      requires `-march=armv8-a+crypto`, which Homebrew's superenv
-    #      doesn't propagate, so the link step fails.
-    resource("hf-xet").stage do
-      inreplace "xet_client/Cargo.toml",
-                'default = ["rustls-tls"]', 'default = ["native-tls"]'
+    # Homebrew's download cache prefixes the filename with the sha256 of
+    # the resource (`<hash>--hf_xet-1.5.0-cp37-abi3-…whl`). pip's PEP 427
+    # parser rejects that — "Invalid wheel filename (wrong number of
+    # parts)" — so copy the wheel into buildpath under its canonical name
+    # before handing it to pip.
+    hf_xet_src = resource("hf-xet").cached_download
+    hf_xet_whl = buildpath/hf_xet_src.basename.to_s.sub(/\A[0-9a-f]+--/, "")
+    cp hf_xet_src, hf_xet_whl
+    # The venv is created with `--without-pip`, so `<venv>/bin/pip`
+    # doesn't exist. Invoke pip the same way Homebrew does internally:
+    # via the system python3.12 with `-m pip --python=<venv-python>`.
+    system Formula["python@3.12"].opt_bin/"python3.12", "-m", "pip",
+           "--python=#{venv.root}/bin/python",
+           "install", "--no-deps", "--ignore-installed", hf_xet_whl.to_s
 
-      if Hardware::CPU.arm?
-        inreplace "xet_data/Cargo.toml",
-                  'sha2 = { workspace = true, features = ["asm"] }',
-                  "sha2 = { workspace = true }"
-      end
-
-      venv.pip_install Pathname.pwd
-    end
+    venv.pip_install_and_link buildpath
   end
 
   test do
