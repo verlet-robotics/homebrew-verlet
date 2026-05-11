@@ -11,6 +11,11 @@ class Verlet < Formula
   sha256 "e855a1f56a2a45a677b4dee6eb1faaa51572fe85c01a429ab288a2bac84b1c3a"
   license "Apache-2.0"
 
+  livecheck do
+    url :stable
+    strategy :pypi
+  end
+
   # hf_xet is the Hugging Face Xet client — a Rust extension that
   # huggingface_hub 1.x marks as a hard runtime dep on supported
   # architectures. Building it from sdist requires cargo + cc-rs to
@@ -178,9 +183,14 @@ class Verlet < Formula
     # parser rejects that — "Invalid wheel filename (wrong number of
     # parts)" — so copy the wheel into buildpath under its canonical name
     # before handing it to pip.
-    hf_xet_src = resource("hf-xet").cached_download
-    hf_xet_whl = buildpath/hf_xet_src.basename.to_s.sub(/\A[0-9a-f]+--/, "")
-    cp hf_xet_src, hf_xet_whl
+    # Derive the canonical wheel filename from the resource URL rather
+    # than from the cached_download path. Homebrew currently stores
+    # downloads as `<sha256>--<basename>`, but that format is internal
+    # and has changed before; deriving from the URL keeps us pinned to a
+    # public contract (PyPI's filename) instead of Homebrew's cache layout.
+    hf_xet_res = resource("hf-xet")
+    hf_xet_whl = buildpath/File.basename(URI(hf_xet_res.url).path)
+    cp hf_xet_res.cached_download, hf_xet_whl
     # The venv is created with `--without-pip`, so `<venv>/bin/pip`
     # doesn't exist. Invoke pip the same way Homebrew does internally:
     # via the system python3.12 with `-m pip --python=<venv-python>`.
