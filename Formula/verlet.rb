@@ -7,8 +7,8 @@ class Verlet < Formula
 
   desc "Download and explore Verlet datasets from the command-line"
   homepage "https://github.com/verlet-robotics/verlet-cli"
-  url "https://files.pythonhosted.org/packages/6f/71/cf4e8198b7744e0724e756b592d548dd7a8788d1f82b8601cf222d771703/verlet-0.12.0.tar.gz"
-  sha256 "314fdedb66bbdf6d772bee7159dae4efc38c70a45d1e33c116346784b32d4347"
+  url "https://files.pythonhosted.org/packages/82/9d/7abe1094be179e4e2448484ca2f56c4c8dee73ca1f3b5b505281f55631a6/verlet-0.13.0.tar.gz"
+  sha256 "122a7904d11da9bce948e188c9fc57886a82c3a2a38afe23217f1f24649b5076"
   license "Apache-2.0"
 
   livecheck do
